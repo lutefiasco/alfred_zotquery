@@ -20,7 +20,7 @@ from zotquery import search, export, append, store, open, configure, scan
 
 # create global methods from `Workflow()`
 WF = Workflow(update_settings={
-    'github_slug': 'smargh/alfred_zotquery',
+    'github_slug': 'lutefiasco/alfred_zotquery',
     'version': config.__version__,
     'frequency': 7
 })
