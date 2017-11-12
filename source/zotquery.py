@@ -2,7 +2,7 @@
 # encoding: utf-8
 #
 # Copyright © 2014 stephen.margheim@gmail.com
-#
+# Updated 2017 mnf lutefish@me.com
 # MIT Licence. See http://opensource.org/licenses/MIT
 #
 from __future__ import unicode_literals
