@@ -7,3 +7,11 @@ testing_env/cache_dir/0_MBXHR545.cpickle
 *.pyc
 *.json
 .DS_Store
+
+
+# Confirms compatibility of AW version with Alfred 3/Sierra
+.alfredversionchecked
+
+# Sublime Text project files
+*.sublime-project
+*.sublime-workflow

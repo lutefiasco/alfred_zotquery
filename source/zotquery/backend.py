@@ -177,9 +177,8 @@ class ZotqueryBackend(PropertyBase):
             fmt.default = {fmt}
             # Add a cancel button with default label
             cb.type=cancelbutton
-        """.format(app=defaults['app'],
-                   csl=defaults['csl'],
-                   fmt=defaults['fmt'])
+        """.format(**defaults)
+
         # Run `pashua` dialog and save results to storage file
         res_dict = pashua.run(conf, encoding='utf8', pashua_path=config.PASHUA)
         if res_dict['cb'] != 1:
@@ -544,45 +543,30 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`list`
 
         """
-        result_array = []
-        creators_query = ('creatorID, creatorTypeID, orderIndex',
-                          'itemCreators',
-                          'itemID',
-                          item_id)
-        # iterate through all creators for this item
-        for creator_info in self._select(creators_query):
-            # save item's creator's ids to variables
-            creator_id = creator_type_id = creator_id = order_index = ''
-            (creator_id,
-             creator_type_id,
-             order_index) = creator_info
-            # get key for this creator's information
-            creators_id_query = ('creatorDataID',
-                                 'creators',
-                                 'creatorID',
-                                 creator_id)
-            (creator_data_id,) = self._select(creators_id_query).fetchone()
-            # get this creator's information
-            creator_info_sql = """
-                SELECT creatorData.lastName,
-                    creatorData.firstName, creatorTypes.creatorType
-                FROM creatorData, creatorTypes
-                WHERE
-                    creatorDataID = {0}
-                    and creatorTypeID = {1}""".format(creator_data_id,
-                                                      creator_type_id)
-            creators_info = self._execute(creator_info_sql)
-            # add all of this creator's info to the appropriate key
-            for creator_info in creators_info:
-                first_name = last_name = ''
-                (last_name,
-                 first_name,
-                 c_type) = creator_info
-                result_array.append({'family': last_name,
-                                     'given': first_name,
-                                     'type': c_type,
-                                     'index': order_index})
-        return result_array
+        creators = []
+
+        sql = """
+        SELECT creators.firstName, creators.lastName,
+            creatorTypes.creatorType, itemCreators.orderIndex
+        FROM itemCreators
+            LEFT JOIN creators
+                ON itemCreators.creatorID = creators.creatorID
+            LEFT JOIN creatorTypes
+                ON itemCreators.creatorTypeID = creatorTypes.creatorTypeID
+        WHERE itemCreators.itemID = ?
+        """
+
+        with self.con:
+            cur = self.con.cursor()
+            for row in cur.execute(sql, (item_id,)):
+                firstname, lastname, typ, order = row
+                log.debug('[%s/%s] %s, %s', item_id, typ, firstname, lastname)
+                creators.append({'family': lastname,
+                                 'given': firstname,
+                                 'type': typ,
+                                 'index': order})
+
+        return creators
 
     def _item_metadata(self, item_id):
         """Generate array of dicts with all item's metadata.
@@ -636,54 +620,24 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`list`
 
         """
-        all_collections = []
-        # get all collection data for item
-        coll_id_query = ('collectionID',
-                         'collectionItems',
-                         'itemID',
-                         item_id)
-        collections_data = self._select(coll_id_query)
-        # iterate thru collections
-        for _collection in collections_data:
-            coll_id = ''
-            (coll_id,) = _collection
-            # get collection name for personal collections
-            collection_info_sql = """
-                SELECT collectionName, key
-                FROM collections
-                WHERE
-                    collectionID = {0}
-                    and libraryID is null
-            """.format(coll_id)
-            collection_info = self._execute(collection_info_sql).fetchall()
-            # if there are any personal collections
-            if collection_info != []:
-                (collection_name,
-                 collection_key) = collection_info[0]
-                all_collections.append({'name': collection_name,
-                                        'key': collection_key,
-                                        'library_id': '0',
-                                        'group': 'personal'})
-            else:
-                # get group collections
-                #if self.personal_only == False:
-                group_info_sql = """
-                    SELECT collections.collectionName,
-                        collections.key, groups.name, groups.libraryID
-                    FROM collections, groups
-                    WHERE
-                        collections.collectionID = {0}
-                        and collections.libraryID is not null
-                """.format(coll_id)
-                (collection_name,
-                 collection_key,
-                 group_name,
-                 library_id) = self._execute(group_info_sql).fetchone()
-                all_collections.append({'name': collection_name,
-                                        'key': collection_key,
-                                        'library_id': library_id,
-                                        'group': group_name})
-        return all_collections
+        collections = []
+
+        sql = """
+        SELECT collections.collectionName, collections.key
+            FROM collections
+                LEFT JOIN collectionItems
+                ON collections.collectionID = collectionItems.collectionID
+        WHERE collectionItems.itemID = ?
+        """
+        with self.con:
+            cur = self.con.cursor()
+            for row in cur.execute(sql, (item_id,)):
+                name, key = row
+                log.debug('[%s/collection] %s', item_id, name)
+                collections.append({'name': name, 'key': key,
+                                    'library_id': '0', 'group': 'personal'})
+
+        return collections
 
     def _item_tags(self, item_id):
         """Generate an array of dicts with all of the `zotero` tags
@@ -726,60 +680,34 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`list`
 
         """
-        all_attachments = []
-        # get all attachment data for item
-        attachment_info_query = ('path, itemID',
-                                 'itemAttachments',
-                                 'sourceItemID',
-                                 item_id)
-        attachments_data = self._select(attachment_info_query)
-        # iterate thru attachments
-        for _attachment in attachments_data:
-            # if attachment has path
-            if _attachment[0]:
-                (att_path,
-                 attachment_id) = _attachment
-                # if internal attachment
-                if att_path[:8] == "storage:":
-                    att_path = att_path[8:]
-                    # if right kind of attachment
-                    if True in (att_path.endswith(ext) for ext in config.ATTACH_EXTS):
-                        # get attachment key
-                        att_query = ('key',
-                                     'items',
-                                     'itemID',
-                                     attachment_id)
-                        (att_key,) = self._select(att_query).fetchone()
-                        base = os.path.join(self.zotero.internal_storage,
-                                            att_key)
-                        final_path = os.path.join(base,
-                                                  att_path)
-                        all_attachments.append({'name': att_path,
-                                                'key': att_key,
-                                                'path': final_path})
-                # if external attachment
-                elif att_path[:12] == "attachments:":
-                    att_path = att_path[12:]
-                    # if right kind of attachment
-                    if True in (att_path.endswith(ext) for ext in config.ATTACH_EXTS):
-                        # get attachment key
-                        att_query = ('key',
-                                     'items',
-                                     'itemID',
-                                     attachment_id)
-                        (att_key,) = self._select(att_query).fetchone()
-                        path = os.path.join(self.zotero.external_storage,
-                                            att_path)
-                        all_attachments.append({'name': att_path,
-                                                'key': att_key,
-                                                'path': path})
-                # if other kind of attachment
-                else:
-                    attachment_name = att_path.split('/')[-1]
-                    all_attachments.append({'name': attachment_name,
-                                            'key': None,
-                                            'path': att_path})
-        return all_attachments
+        attachments = []
+
+        sql = """
+        SELECT itemAttachments.path, itemAttachments.itemID, items.key
+            FROM itemAttachments
+                LEFT JOIN items ON itemAttachments.itemID = items.itemID
+        WHERE itemAttachments.parentItemID = ?
+        """
+
+        with self.con:
+            cur = self.con.cursor()
+
+            for row in cur.execute(sql, (item_id,)):
+                name, id_, key = row
+                log.debug('[%s/attachment] %s', item_id, name)
+
+                for prefix in ('attachment:', 'storage:'):
+                    if name.startswith(prefix):
+                        name = name[len(prefix):]
+                        for x in config.ATTACH_EXTS:
+                            if name.endswith(x):
+                                path = os.path.join(
+                                    self.zotero.internal_storage, key, name)
+
+                                attachments.append({'name': name, 'key': key,
+                                                    'path': path})
+
+        return attachments
 
     def _item_notes(self, item_id):
         """Generate an array of dicts with all of the item's notes.
@@ -790,20 +718,20 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`list`
 
         """
-        all_notes = []
-        # get all notes for item
-        note_info_query = ('note',
-                           'itemNotes',
-                           'sourceItemID',
-                           item_id)
-        notes_data = self._select(note_info_query)
-        # iterate thru notes
-        for _note in notes_data:
-            note = ''
-            (note,) = _note
-            # strip note HTML before adding
-            all_notes.append(note[33:-10])
-        return all_notes
+        notes = []
+        sql = """SELECT note FROM itemNotes WHERE parentItemID = ?"""
+        with self.con:
+            cur = self.con.cursor()
+            for row in cur.execute(sql, (item_id,)):
+                note = row[0]
+                log.debug('[%s/note] %s', item_id, note)
+                notes.append(note)
+
+        # TODO: Strip HTML
+        # Original code:
+        # note = note[33:-10]
+
+        return notes
 
 #-----------------------------------------------------------------------------
 # Alias
